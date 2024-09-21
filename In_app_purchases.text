@@ -1,0 +1,253 @@
+In_App_ Purchases with package
+
+
+ final InAppPurchase _inAppPurchase = InAppPurchase.instance;
+  late StreamSubscription<List<PurchaseDetails>> _subscription;
+  List<ProductDetails> _products = [];
+  Set<String> _subscriptionIds = {};
+  PurchaseDetails? purchasedProduct;
+  PurchaseInfo _purchaseInfo = PurchaseInfo();
+
+  PurchaseInfo get purchaseInfo => _purchaseInfo;
+  bool get isSubscribed => _isSubscriptionBuy;
+ List<ProductDetails> get products => _products;
+
+——————————————————————  Android product IDs  ------------------------------------------>
+
+  // Android product IDs
+  static const Set<String> androidSubscriptionIds = {
+    "monthly",
+    "yearly",
+    "daily",
+  };
+
+——————————————————————  iOS product IDs  ------------------------------------------>
+
+  // iOS product IDs
+  static const Set<String> iosSubscriptionIds = {
+    “Monthly”,
+    "yearly",
+  };
+
+——————————————————————  Initialize in-app purchases ------------------------------------------>
+
+  // Initialize in-app purchases
+  Future<void> inAppInitialize(BuildContext context) async {
+    _setSubscriptionIds();
+    fetchSubscriptions();
+    handlePurchaseUpdates(context);
+  }
+
+  ———————————————————— Set subscription IDs based on platform —————————————>
+
+  void _setSubscriptionIds() {
+    if (Platform.isAndroid) {
+      _subscriptionIds = androidSubscriptionIds;
+      notifyListeners();
+    } else if (Platform.isIOS) {
+      _subscriptionIds = iosSubscriptionIds;
+      notifyListeners();
+    } else {
+      print('there is no list in subscription');
+    }
+  }
+
+——————————————————————  Fetch Subscriptions ------------------------------------------>
+
+  Future<void> fetchSubscriptions() async {
+    final bool available = await _inAppPurchase.isAvailable();
+    if (available) {
+      final ProductDetailsResponse response =
+          await _inAppPurchase.queryProductDetails(_subscriptionIds);
+      if (response.error == null) {
+        _products = response.productDetails;
+        log('Purchase product is not null: ${_products.toString()}');
+        notifyListeners();
+      } else {
+        Fluttertoast.showToast(
+            msg: 'Error querying product details: ${response.error}');
+        log('Error querying product details: ${response.error}');
+      }
+    } else {
+      Fluttertoast.showToast(msg: 'In-app purchases not available');
+      log('In-app purchases not available');
+    }
+  }
+
+——————————————————————  Check for new purchases and  updates ------------------------------------------>
+
+  Future<void> handlePurchaseUpdates(BuildContext context) async {
+    try {
+      await _inAppPurchase.restorePurchases();
+      print('=======================================================>> 1');
+      _subscription = _inAppPurchase.purchaseStream.listen(
+        (purchaseDetailsList) {
+          print('=======================================================>> 2');
+          saveDataToSharedpref(purchaseDetailsList, context);
+        },
+        onDone: () {
+          print('=======================================================>> 6');
+          _subscription.cancel();
+        },
+        onError: (error) {
+          print('=======================================================>> 7');
+          print('==========>>>>>. Purchase Stream Error: $error');
+        },
+      );
+
+      print('=======================================================>> 8');
+    } catch (e, st) {
+      print('=========>>>>> Error in handlePurchaseUpdates function: $e $st');
+    }
+  }
+
+—————————————————————— Save purchased detail in local  ------------------------------------------>
+
+  saveDataToSharedpref(
+      List<PurchaseDetails> purchaseDetailsList, BuildContext context) async {
+    try {
+      await restGoles(context);
+
+      final SharedPreferences prefs = await SharedPreferences.getInstance();
+      final purchaseInfoPersistence = PurchaseInfoPersistence(prefs);
+      _purchaseInfo = (await purchaseInfoPersistence.load()) ?? _purchaseInfo;
+      for (PurchaseDetails purchaseDetails in purchaseDetailsList) {
+        print('Processing purchase: ${purchaseDetails.productID}');
+
+        if (purchaseDetails.status == PurchaseStatus.purchased ||
+            purchaseDetails.status == PurchaseStatus.restored) {
+          print('Purchased Product: ${purchaseDetails.productID}');
+          if (isValidPurchase(purchaseDetails)) {
+            final newPurchaseInfo = PurchaseInfo(
+              productID: purchaseDetails.productID,
+              verificationData: "${purchaseDetails.verificationData}",
+              transactionDate: "${purchaseDetails.transactionDate}",
+              status: purchaseDetails.status,
+              isPurchased: true,
+            );
+            print('Current Purchase Product: $newPurchaseInfo');
+
+            // Check if this product already exists
+            final existingPurchaseInfo =
+                purchaseInfo.productID == purchaseDetails.productID;
+
+            if (existingPurchaseInfo == false) {
+              // Update or add new data
+              await purchaseInfoPersistence.save(newPurchaseInfo);
+              _purchaseInfo =
+                  (await purchaseInfoPersistence.load()) ?? _purchaseInfo;
+              notifyListeners();
+              print('Product ID: ${newPurchaseInfo.productID}');
+              print('Verification Data: ${newPurchaseInfo.verificationData}');
+              print('Transaction Date: ${newPurchaseInfo.transactionDate}');
+              print('Status: ${newPurchaseInfo.status}');
+              notifyListeners();
+            } else {
+              print(
+                  'Product ${purchaseDetails.productID} is already up to date.');
+              print(
+                  'Product ${purchaseInfo.isPurchased} is already up to date.');
+              _purchaseInfo =
+                  (await purchaseInfoPersistence.load()) ?? _purchaseInfo;
+              notifyListeners();
+            }
+
+            _isShowPremiumField = true;
+            onChangeShowPremiumField();
+            print('Premium Field is set to: $_isShowPremiumField');
+
+            if (purchaseDetails.pendingCompletePurchase) {
+              await _inAppPurchase.completePurchase(purchaseDetails);
+            }
+          } else {
+            await restGoles(context);
+            _isShowPremiumField = true;
+            print(
+                "Validation failed for purchase: ${purchaseDetails.productID}");
+          }
+        } else if (purchaseDetails.status == PurchaseStatus.error) {
+          log('Purchase Error: ${purchaseDetails.error}');
+          _isShowPremiumField = false;
+          notifyListeners();
+        } else if (purchaseDetails.status == PurchaseStatus.pending) {
+          log('Purchase Pending: ${purchaseDetails.productID}');
+          _isShowPremiumField = false;
+          notifyListeners();
+        }
+      }
+      onChangeShowPremiumField();
+    } catch (e, st) {
+      print('Error in saveDataToSharedpref function: $e $st');
+    }
+  }
+
+—————————————————————— Check if Purchased Valid ------------------------------------------>
+
+  bool isValidPurchase(PurchaseDetails purchaseDetails) {
+    if (purchaseDetails.transactionDate == null) {
+      return false;
+    }
+    DateTime purchaseDate;
+    try {
+      purchaseDate = DateTime.fromMillisecondsSinceEpoch(
+          int.parse(purchaseDetails.transactionDate!));
+      print("this is new date format::  ${purchaseDate}");
+    } catch (e, st) {
+      print(
+          'Unexpected transaction date format: ${purchaseDetails.transactionDate}');
+      print('// Invalid date format::: $e $st');
+      return false;
+    }
+    // Get the current date
+    DateTime now = DateTime.now();
+    Duration validityPeriodForMonth = Duration(days: 30); // Approx. 1 day
+    Duration validityPeriodFordaily = Duration(days: 1); // Approx. 1 month
+    Duration validityPeriodForYear = Duration(days: 365); // Approx. 1 year
+    // Check if the purchase date is within the validity period
+    bool isDateValid = false;
+    if (purchaseDetails.productID == "monthly_8d" ||
+        purchaseDetails.productID == "TC_monthly_8d") {
+      isDateValid = now.isBefore(purchaseDate.add(validityPeriodForMonth));
+    } else if (purchaseDetails.productID == "yearly_96d" ||
+        purchaseDetails.productID == "TC_yearly_96d") {
+      isDateValid = now.isBefore(purchaseDate.add(validityPeriodForYear));
+    } else {
+      isDateValid = now.isBefore(purchaseDate.add(validityPeriodFordaily));
+    }
+    return isDateValid;
+  }
+
+
+—————————————————————— BuySubscription ------------------------------------------>
+
+  Future<void> buySubscription(
+    ProductDetails? product,
+    BuildContext context,
+  ) async {
+    if (product != null) {
+      log('Product is not null: ${product.title}');
+      final PurchaseParam purchaseParam =
+          PurchaseParam(productDetails: product);
+      try {
+        final bool purchaseSuccess =
+            await _inAppPurchase.buyNonConsumable(purchaseParam: purchaseParam);
+        if (purchaseSuccess) {
+          await handlePurchaseUpdates(context);
+          _isSubscriptionBuy = true;
+          log('Purchase successful');
+          Navigator.pop(context, true);
+        } else {
+          log('Purchase initiation failed');
+          Navigator.pop(context, false);
+        }
+      } catch (e) {
+        log('Exception occurred during purchase: $e');
+        Navigator.pop(
+            context, false); // Pass failure result back to main screen
+      }
+    } else {
+      log('Invalid product details');
+      Navigator.pop(context, false); // Pass failure result back to main screen
+    }
+  }
+
