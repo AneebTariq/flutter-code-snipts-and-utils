@@ -1,0 +1,134 @@
+import 'package:flutter/material.dart';
+import 'package:get/get.dart';
+import '../../service/CheckConnectionService.dart';
+import 'package:http/http.dart' as http;
+
+
+class PaymentController extends GetxController {
+
+  final GlobalKey<FormState> addCardFormKey = GlobalKey<FormState>();
+  CheckConnectionService connectionService = CheckConnectionService();
+
+   final TextEditingController cardNo = TextEditingController();
+   final TextEditingController cardName = TextEditingController();
+   final TextEditingController cardExpDate = TextEditingController();
+   final TextEditingController cardCVC = TextEditingController();
+
+   String paymentMethodName = "";
+   String stripeCardId="";
+   String selectedCardNumber ="";
+   GetAllCardModel? getAllCardModel;
+
+
+  void setSelectedPaymentMethod(PaymentMethodType paymentMethodType)
+  {
+    selectedPaymentMethod.value = paymentMethodType;
+  }
+  Future<void>  makePayment() async {
+    try {
+      var gPay = const PaymentSheetGooglePay(
+         // testEnv: true,
+          merchantCountryCode: "GB",
+          currencyCode: "GBP");
+
+      var applePay =  PaymentSheetApplePay(
+          merchantCountryCode: "GB",
+          cartItems: [
+            ApplePayCartSummaryItem.immediate(label: "Upfront",
+                amount: Get.find<SalonController>().advanceModel!.data!.initialPayment.toString()
+            )
+          ],
+          buttonType: PlatformButtonType.buy);
+   //  paymentIntent = await createPaymentIntent((double.parse(pay) * 100).toInt().toString(), 'GBP');
+    print('the ephemral key ${Get.find<SalonController>().advanceModel!.data!.ephemeralKeySecret!}');
+      await Stripe.instance
+          .initPaymentSheet(
+          paymentSheetParameters: SetupPaymentSheetParameters(
+              allowsDelayedPaymentMethods: true,
+              paymentIntentClientSecret: Get.find<SalonController>().advanceModel!.data!.clientSecret!,
+             style: ThemeMode.dark,
+              customerId: GetLocalStorage().getStripeCustomerId() ,
+              merchantDisplayName: 'TrimCustomer',
+              customerEphemeralKeySecret: Get.find<SalonController>().advanceModel!.data!.ephemeralKeySecret!,
+              googlePay: gPay,
+              applePay: applePay,
+              appearance: PaymentSheetAppearance(
+          colors: PaymentSheetAppearanceColors(
+            primary: Colors.white,
+            background: Colors.black,
+            primaryText: Colors.white,
+              secondaryText: Colors.white
+          ),
+
+        shapes: PaymentSheetShape(
+          borderRadius: 20,
+        ),
+        primaryButton: PaymentSheetPrimaryButtonAppearance(
+          shapes: PaymentSheetPrimaryButtonShape(),
+          colors: PaymentSheetPrimaryButtonTheme(
+            dark: PaymentSheetPrimaryButtonThemeColors(
+              background: Colors.black,
+              text: Colors.white,
+              border: Colors.white
+            ),
+            light: PaymentSheetPrimaryButtonThemeColors(
+                background: Colors.black,
+                text: Colors.white,
+                border: Colors.white
+            ),
+          ),
+        ),
+      ),
+          ))
+          .then((value) {
+        displayPaymentSheet();
+        print("init $value");
+      }).onError((error, stackTrace) {
+        print("error    ${error}");
+        Get.find<SalonController>().isPaymentDone.value=false;
+      });
+    } catch (err) {
+      print(err);
+      Get.find<SalonController>().isPaymentDone.value=false;
+    }
+  }
+
+  displayPaymentSheet() async {
+    try {
+      await Stripe.instance.presentPaymentSheet().onError((error, stackTrace) {
+        stackTrace.toString();
+        Get.find<SalonController>().isPaymentDone.value=false;
+        print("sheet error  $error, ${stackTrace.toString()}]");
+      });
+      var intent = await Stripe.instance.retrievePaymentIntent(Get.find<SalonController>().advanceModel!.data!.clientSecret!);
+      print("Status  ${intent.status}");
+      print('the intent $intent');
+      var paymentMethodTypes = intent.captureMethod.name;
+      print('the capture method $paymentMethodTypes');
+         stripeCardId=intent.paymentMethodId!;
+      if (intent.status == PaymentIntentsStatus.Succeeded || intent.status == PaymentIntentsStatus.RequiresCapture)
+      {
+       Get.find<SalonController>().addAppointmentBooking(stripeCardId, Get.context!);
+        // upfrontPayment(intent.paymentMethodId!);
+      } else {
+        CustomToast.failToast(msg: "Something went wrong");
+      }
+
+      print("intent   $intent");
+    } catch (e) {
+      Get.find<SalonController>().isPaymentDone.value=false;
+      print("error $e");
+    }
+  }
+
+  @override
+  void onClose() {
+    // TODO: implement onClose
+     super.onClose();
+     cardNo.dispose();
+     cardName.dispose();
+     cardExpDate.dispose();
+     cardCVC.dispose();
+  }
+
+}
